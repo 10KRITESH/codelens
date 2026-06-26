@@ -2,8 +2,9 @@ import express from 'express'
 import dotenv from 'dotenv'
 import { parseRepoUrl, fetchRepoTree, filterCodeFiles, fetchFileContent } from './services/github.js'
 import { chunkFile } from './services/chunker.js'
-import { embeddedChunk } from './services/embedder.js'
+import { embedChunk } from './services/embedder.js'
 import { insertChunk } from './db/queries.js'
+import { auditRepo } from './services/auditor.js'
 
 dotenv.config()
 
@@ -28,13 +29,14 @@ app.post('/api/audit', async (req, res) => {
     const chunks = chunkFile(path, content)
 
     for (const chunk of chunks) {
-      const embeddedResult = await embeddedChunk(chunk)
+      const embeddedResult = await embedChunk(chunk)
       await insertChunk(repoUrl, embeddedResult)
       totalChunks++
     }
   }
 
-  res.json({ owner, repo, totalFiles: tree.length, codeFiles: codeFiles.length, totalChunks, message: 'indexing complete' })
+  const report = await auditRepo(repoUrl)
+  res.json({ owner, repo, totalFiles: tree.length, codeFiles: codeFiles.length, totalChunks, report })
 })
 
 const PORT = process.env.PORT || 3000

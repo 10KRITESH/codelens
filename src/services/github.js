@@ -30,15 +30,32 @@ export function parseRepoUrl(repoUrl) {
     }
 }
 
+const getHeaders = () => {
+    const headers = {
+        'User-Agent': 'CodeLens-App'
+    }
+    if (process.env.GITHUB_TOKEN) {
+        headers['Authorization'] = `token ${process.env.GITHUB_TOKEN}`
+    }
+    return headers
+}
+
 export async function fetchRepoTree(owner, repo) {
-    const response = await axios.get(
-        `https://api.github.com/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`
-    )
-    return response.data.tree
+  const repoInfo = await axios.get(
+    `https://api.github.com/repos/${owner}/${repo}`,
+    { headers: getHeaders() }
+  )
+  const defaultBranch = repoInfo.data.default_branch
+
+  const response = await axios.get(
+    `https://api.github.com/repos/${owner}/${repo}/git/trees/${defaultBranch}?recursive=1`,
+    { headers: getHeaders() }
+  )
+  return response.data.tree
 }
 
 export async function fetchFileContent (file) {
-    const response = await axios.get(file.url)
+    const response = await axios.get(file.url, { headers: getHeaders() })
     const content = Buffer.from(response.data.content, 'base64').toString('utf-8')
     return {
         path: file.path,
