@@ -1,15 +1,17 @@
 import express from 'express'
 import dotenv from 'dotenv'
-import { parseRepoUrl, fetchRepoTree, filterCodeFiles, fetchFileContent } from './services/github.js'
-import { chunkFile } from './services/chunker.js'
-import { embedChunk } from './services/embedder.js'
-import { insertChunk } from './db/queries.js'
-import { auditRepo } from './services/auditor.js'
+import { Queue } from 'bullmq'
+import pool from './db/index.js'
+import './workers/auditWorker.js'
 
 dotenv.config()
 
 const app = express()
 app.use(express.json())
+
+const auditQueue = new Queue('audit', {
+  connection: { host: 'localhost', port: 6379 }
+})
 
 app.post('/api/audit', async (req, res) => {
   const { repoUrl } = req.body
@@ -18,25 +20,58 @@ app.post('/api/audit', async (req, res) => {
     return res.status(400).json({ error: 'Repo URL is required' })
   }
 
-  const { owner, repo } = parseRepoUrl(repoUrl)
-  const tree = await fetchRepoTree(owner, repo)
-  const codeFiles = filterCodeFiles(tree)
-
-  let totalChunks = 0
-
-  for (const file of codeFiles) {
-    const { path, content } = await fetchFileContent(file)
-    const chunks = chunkFile(path, content)
-
-    for (const chunk of chunks) {
-      const embeddedResult = await embedChunk(chunk)
-      await insertChunk(repoUrl, embeddedResult)
-      totalChunks++
-    }
+  try {
+    const job = await auditQueue.add('audit-repo', { repoUrl })
+    res.json({ jobId: job.id, status: 'queued', message: 'Audit started' })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to queue audit', details: err.message })
   }
+})
 
-  const report = await auditRepo(repoUrl)
-  res.json({ owner, repo, totalFiles: tree.length, codeFiles: codeFiles.length, totalChunks, report })
+app.get('/api/status/:jobId', async (req, res) => {
+  const { jobId } = req.params
+
+  try {
+    const job = await auditQueue.getJob(jobId)
+
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' })
+    }
+
+    const state = await job.getState()
+    const progress = job.progress
+
+    if (state === 'completed') {
+      return res.json({ jobId, status: 'completed', progress: 100, result: job.returnvalue })
+    }
+
+    if (state === 'failed') {
+      return res.json({ jobId, status: 'failed', error: job.failedReason })
+    }
+
+    res.json({ jobId, status: state, progress })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to get job status', details: err.message })
+  }
+})
+
+app.get('/api/report/:repoUrl', async (req, res) => {
+  const repoUrl = decodeURIComponent(req.params.repoUrl)
+
+  try {
+    const result = await pool.query(
+      'SELECT report, created_at FROM audit_reports WHERE repo_url = $1',
+      [repoUrl]
+    )
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No report found for this repo' })
+    }
+
+    res.json({ repoUrl, ...result.rows[0] })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch report', details: err.message })
+  }
 })
 
 const PORT = process.env.PORT || 3000

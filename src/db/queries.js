@@ -9,3 +9,10 @@ export async function insertChunk(repoUrl, chunk) {
         [repoUrl, path, startLine, endLine, content, `[${embedding.join(',')}]`]
     )
 }
+
+export async function deleteChunksByRepo(repoUrl) {
+    await pool.query(
+    `DELETE FROM code_chunks WHERE repo_url = $1`,
+    [repoUrl]
+    )
+}
