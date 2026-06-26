@@ -32,6 +32,9 @@ build/
 *.sln
 *.sw?
 
+# AI context documents (local only, not for GitHub)
+CODEBASE_CONTEXT.md
+
 # Database/Docker data directories (just in case)
 pgdata/
 postgres_data/

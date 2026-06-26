@@ -36,3 +36,12 @@ export async function fetchRepoTree(owner, repo) {
     )
     return response.data.tree
 }
+
+export async function fetchFileContent (file) {
+    const response = await axios.get(file.url)
+    const content = Buffer.from(response.data.content, 'base64').toString('utf-8')
+    return {
+        path: file.path,
+        content
+    }
+}
