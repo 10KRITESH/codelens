@@ -1,8 +1,8 @@
-import Groq from 'groq-sdk'
+import { GoogleGenAI, Type } from '@google/genai'
 import axios from 'axios'
 import pool from '../db/index.js'
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
 
 async function embedQuery(query) {
   const response = await axios.post('http://localhost:11434/api/embeddings', {
@@ -32,30 +32,34 @@ async function runAuditPass(repoUrl, passConfig) {
     `File: ${chunk.path} (lines ${chunk.start_line}-${chunk.end_line})\n${chunk.content}`
   ).join('\n\n---\n\n')
 
-  const response = await groq.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
-    messages: [
-      {
-        role: 'system',
-        content: `You are a senior code auditor specializing in ${passConfig.focus}.
-Return ONLY a JSON array of issues, no markdown, no explanation.
-Format: [{ "severity": "high|medium|low", "type": "${passConfig.type}", "file": "path", "lines": "23-45", "title": "short title", "description": "what and why" }]
-If no issues found, return an empty array: []`
-      },
-      {
-        role: 'user',
-        content: `Find ${passConfig.focus} issues in this code:\n\n${context}`
-      }
-    ]
-  })
-
-  const raw = response.choices[0].message.content
-  const cleaned = raw.replace(/```json|```/g, '').trim()
-
   try {
-    return JSON.parse(cleaned)
-  } catch {
-    console.error(`Pass "${passConfig.focus}" returned invalid JSON:`, cleaned)
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `Find ${passConfig.focus} issues in this code:\n\n${context}`,
+      config: {
+        systemInstruction: `You are a senior code auditor specializing in ${passConfig.focus}. Check the provided context files and output all issues.`,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              severity: { type: Type.STRING, enum: ['high', 'medium', 'low'] },
+              type: { type: Type.STRING },
+              file: { type: Type.STRING },
+              lines: { type: Type.STRING },
+              title: { type: Type.STRING },
+              description: { type: Type.STRING }
+            },
+            required: ['severity', 'type', 'file', 'lines', 'title', 'description']
+          }
+        }
+      }
+    })
+
+    return JSON.parse(response.text)
+  } catch (err) {
+    console.error(`Pass "${passConfig.focus}" failed:`, err.message)
     return []
   }
 }
