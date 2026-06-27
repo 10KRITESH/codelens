@@ -3,7 +3,7 @@ import { parseRepoUrl, fetchRepoTree, filterCodeFiles, fetchFileContent } from '
 import { chunkFile } from '../services/chunker.js'
 import { embedChunk } from '../services/embedder.js'
 import { insertChunk, deleteChunksByRepo } from '../db/queries.js'
-import { fullAudit } from '../services/auditor.js'
+import { auditRepo } from '../services/auditor.js'
 import pool from '../db/index.js'
 
 export const worker = new Worker('audit', async (job) => {
@@ -45,8 +45,8 @@ export const worker = new Worker('audit', async (job) => {
   }
 
   await job.updateProgress(80)
-  console.log('[Worker] Running Tier 1 + Tier 2 combined audit...')
-  const report = await fullAudit(repoUrl)
+  console.log('[Worker] Running audit...')
+  const report = await auditRepo(repoUrl)
   await job.updateProgress(95)
 
   await pool.query(

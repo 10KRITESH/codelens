@@ -1,7 +1,6 @@
 import Groq from 'groq-sdk'
 import axios from 'axios'
 import pool from '../db/index.js'
-import { agentAudit } from './agentAuditor.js'
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
@@ -61,7 +60,7 @@ If no issues found, return an empty array: []`
   }
 }
 
-// ─── Tier 1: Multi-pass RAG ──────────────────────────────────────────────────
+// ─── Multi-pass RAG Audit ─────────────────────────────────────────────────────
 
 export async function auditRepo(repoUrl) {
   const passes = [
@@ -71,91 +70,37 @@ export async function auditRepo(repoUrl) {
     { query: 'performance bottlenecks slow loops expensive operations memory leaks', focus: 'performance issues', type: 'performance' },
   ]
 
+  console.log('[Audit] Starting multi-pass RAG audit...')
   const allIssues = []
 
   for (const pass of passes) {
+    console.log(`[Audit] Running pass: ${pass.focus}`)
     const issues = await runAuditPass(repoUrl, pass)
-    allIssues.push(...issues.map(i => ({ ...i, source: 'tier1' })))
+    console.log(`[Audit] Pass "${pass.focus}": ${issues.length} issues found`)
+    allIssues.push(...issues)
   }
 
-  return allIssues
-}
+  const highCount = allIssues.filter(i => i.severity === 'high').length
+  const mediumCount = allIssues.filter(i => i.severity === 'medium').length
+  const score = Math.max(0, 100 - (highCount * 10) - (mediumCount * 4) - (allIssues.length * 1))
 
-// ─── Deduplication & Merge ───────────────────────────────────────────────────
-
-function parseLineRange(lines = '') {
-  const [start, end] = String(lines).split('-').map(Number)
-  return { start: start || 0, end: end || start || 0 }
-}
-
-function overlaps(a, b) {
-  if (a.file !== b.file) return false
-  const ra = parseLineRange(a.lines)
-  const rb = parseLineRange(b.lines)
-  return ra.start <= rb.end && rb.start <= ra.end
-}
-
-const SEVERITY_RANK = { high: 3, medium: 2, low: 1 }
-
-function deduplicateIssues(tier1, tier2) {
-  const merged = [...tier1]
-
-  for (const t2Issue of tier2) {
-    const duplicate = merged.find(existing => overlaps(existing, t2Issue))
-    if (duplicate) {
-      // Keep the higher severity version, add agent confidence flag
-      if ((SEVERITY_RANK[t2Issue.severity] || 0) > (SEVERITY_RANK[duplicate.severity] || 0)) {
-        duplicate.severity = t2Issue.severity
-        duplicate.description = t2Issue.description
-      }
-      duplicate.agentVerified = true
-    } else {
-      merged.push({ ...t2Issue, source: 'tier2' })
-    }
-  }
-
-  return merged
-}
-
-function buildReport(issues, tier1Count, tier2Count) {
   const fileRiskMap = {}
-  for (const issue of issues) {
+  for (const issue of allIssues) {
     if (!fileRiskMap[issue.file]) fileRiskMap[issue.file] = 0
-    fileRiskMap[issue.file] += SEVERITY_RANK[issue.severity] || 1
+    const rank = { high: 3, medium: 2, low: 1 }
+    fileRiskMap[issue.file] += rank[issue.severity] || 1
   }
-
   const riskiestFiles = Object.entries(fileRiskMap)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
     .map(([file]) => file)
 
-  const highCount = issues.filter(i => i.severity === 'high').length
-  const mediumCount = issues.filter(i => i.severity === 'medium').length
-  const score = Math.max(0, 100 - (highCount * 10) - (mediumCount * 4) - (issues.length * 1))
+  console.log(`[Audit] Complete: ${allIssues.length} issues found, score=${score}`)
 
   return {
-    summary: `Full audit complete. Found ${issues.length} issues (${highCount} high, ${mediumCount} medium). Tier 1 RAG: ${tier1Count} issues, Tier 2 Agent: ${tier2Count} new issues.`,
-    issues,
+    summary: `Audit complete. Found ${allIssues.length} issues (${highCount} high, ${mediumCount} medium).`,
+    issues: allIssues,
     riskiestFiles,
-    score,
-    meta: { tier1Count, tier2Count, totalUnique: issues.length }
+    score
   }
-}
-
-// ─── Full Combined Audit (Tier 1 + Tier 2) ───────────────────────────────────
-
-export async function fullAudit(repoUrl) {
-  console.log('[Audit] Starting Tier 1 multi-pass RAG...')
-  const tier1Issues = await auditRepo(repoUrl)
-  console.log(`[Audit] Tier 1 complete: ${tier1Issues.length} issues found.`)
-
-  console.log('[Audit] Starting Tier 2 agentic investigation...')
-  const tier2Issues = await agentAudit(repoUrl, tier1Issues)
-  console.log(`[Audit] Tier 2 complete: ${tier2Issues.length} new issues found.`)
-
-  const merged = deduplicateIssues(tier1Issues, tier2Issues)
-  const report = buildReport(merged, tier1Issues.length, tier2Issues.length)
-
-  console.log(`[Audit] Final report: ${merged.length} unique issues, score=${report.score}`)
-  return report
 }
