@@ -1,8 +1,8 @@
-import { GoogleGenAI, Type } from '@google/genai'
+import Groq from 'groq-sdk'
 import axios from 'axios'
 import pool from '../db/index.js'
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
 async function embedQuery(query) {
   const response = await axios.post('http://localhost:11434/api/embeddings', {
@@ -33,31 +33,31 @@ async function runAuditPass(repoUrl, passConfig) {
   ).join('\n\n---\n\n')
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `Find ${passConfig.focus} issues in this code:\n\n${context}`,
-      config: {
-        systemInstruction: `You are a senior code auditor specializing in ${passConfig.focus}. Check the provided context files and output all issues.`,
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              severity: { type: Type.STRING, enum: ['high', 'medium', 'low'] },
-              type: { type: Type.STRING },
-              file: { type: Type.STRING },
-              lines: { type: Type.STRING },
-              title: { type: Type.STRING },
-              description: { type: Type.STRING }
-            },
-            required: ['severity', 'type', 'file', 'lines', 'title', 'description']
-          }
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a senior code auditor specializing in ${passConfig.focus}. 
+Analyze the provided code carefully and return a JSON array of issues found.
+Each issue must have: severity (high/medium/low), type (${passConfig.type}), file, lines, title, description.
+Be thorough — flag real bugs, security holes, and maintainability issues.
+Return ONLY a valid JSON array, no markdown, no explanation.`
+        },
+        {
+          role: 'user',
+          content: `Find ${passConfig.focus} issues in this code:\n\n${context}`
         }
-      }
+      ],
+      temperature: 0.2,
+      response_format: { type: 'json_object' }
     })
 
-    return JSON.parse(response.text)
+    const raw = completion.choices[0]?.message?.content || '{}'
+    const parsed = JSON.parse(raw)
+    // Handle both {issues: [...]} and [...] response shapes
+    const issues = Array.isArray(parsed) ? parsed : (parsed.issues || [])
+    return issues.map(i => ({ ...i, type: i.type || passConfig.type, source: 'tier1' }))
   } catch (err) {
     console.error(`Pass "${passConfig.focus}" failed:`, err.message)
     return []
@@ -68,10 +68,10 @@ async function runAuditPass(repoUrl, passConfig) {
 
 export async function auditRepo(repoUrl) {
   const passes = [
-    { query: 'security vulnerabilities exposed secrets hardcoded credentials api keys', focus: 'security vulnerabilities', type: 'security' },
-    { query: 'bugs null pointer undefined errors wrong logic crashes unhandled promise', focus: 'bugs and logic errors', type: 'bug' },
-    { query: 'poor code quality duplicate code long functions missing abstractions', focus: 'code quality', type: 'quality' },
-    { query: 'performance bottlenecks slow loops expensive operations memory leaks', focus: 'performance issues', type: 'performance' },
+    { query: 'security vulnerabilities exposed secrets hardcoded credentials api keys injection', focus: 'security vulnerabilities', type: 'security' },
+    { query: 'bugs null pointer undefined errors wrong logic crashes unhandled promise rejection', focus: 'bugs and logic errors', type: 'bug' },
+    { query: 'poor code quality duplicate code long functions missing abstractions magic numbers', focus: 'code quality', type: 'quality' },
+    { query: 'performance bottlenecks slow loops expensive operations memory leaks synchronous blocking', focus: 'performance issues', type: 'performance' },
   ]
 
   console.log('[Audit] Starting multi-pass RAG audit...')

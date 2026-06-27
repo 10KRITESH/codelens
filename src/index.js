@@ -3,6 +3,7 @@ import dotenv from 'dotenv'
 import { Queue } from 'bullmq'
 import pool from './db/index.js'
 import './workers/auditWorker.js'
+import { repoAlreadyIndexed, getExistingReport } from './db/queries.js'
 
 dotenv.config()
 
@@ -18,6 +19,26 @@ app.post('/api/audit', async (req, res) => {
 
   if (!repoUrl) {
     return res.status(400).json({ error: 'Repo URL is required' })
+  }
+  const alreadyIndexed = await repoAlreadyIndexed(repoUrl)
+  if (alreadyIndexed) {
+    const existingReport = await getExistingReport(repoUrl)
+
+    if (existingReport) {
+      const chunkData = await pool.query(
+        'SELECT COUNT(*) as chunks, COUNT(DISTINCT path) as files FROM code_chunks WHERE repo_url = $1', [repoUrl]
+      )
+      const chunks = parseInt(chunkData.rows[0].chunks)
+      const files = parseInt(chunkData.rows[0].files)
+
+      return res.json({ 
+        status: 'cached', 
+        report: existingReport,
+        totalFiles: files,
+        codeFiles: files,
+        totalChunks: chunks
+      })
+    }
   }
 
   try {

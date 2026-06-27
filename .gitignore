@@ -34,6 +34,7 @@ build/
 
 # AI context documents (local only, not for GitHub)
 CODEBASE_CONTEXT.md
+codelens-frontend-prompt.md
 
 # Database/Docker data directories (just in case)
 pgdata/
