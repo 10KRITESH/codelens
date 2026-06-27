@@ -15,35 +15,39 @@ const auditQueue = new Queue('audit', {
 })
 
 app.post('/api/audit', async (req, res) => {
-  const { repoUrl } = req.body
+  const { repoUrl, force } = req.body
 
   if (!repoUrl) {
     return res.status(400).json({ error: 'Repo URL is required' })
   }
-  const alreadyIndexed = await repoAlreadyIndexed(repoUrl)
-  if (alreadyIndexed) {
-    const existingReport = await getExistingReport(repoUrl)
 
-    if (existingReport) {
-      const chunkData = await pool.query(
-        'SELECT COUNT(*) as chunks, COUNT(DISTINCT path) as files FROM code_chunks WHERE repo_url = $1', [repoUrl]
-      )
-      const chunks = parseInt(chunkData.rows[0].chunks)
-      const files = parseInt(chunkData.rows[0].files)
+  // Only serve cached results if force is not requested
+  if (!force) {
+    const alreadyIndexed = await repoAlreadyIndexed(repoUrl)
+    if (alreadyIndexed) {
+      const existingReport = await getExistingReport(repoUrl)
 
-      return res.json({ 
-        status: 'cached', 
-        report: existingReport,
-        totalFiles: files,
-        codeFiles: files,
-        totalChunks: chunks
-      })
+      if (existingReport) {
+        const chunkData = await pool.query(
+          'SELECT COUNT(*) as chunks, COUNT(DISTINCT path) as files FROM code_chunks WHERE repo_url = $1', [repoUrl]
+        )
+        const chunks = parseInt(chunkData.rows[0].chunks)
+        const files = parseInt(chunkData.rows[0].files)
+
+        return res.json({ 
+          status: 'cached', 
+          report: existingReport,
+          totalFiles: files,
+          codeFiles: files,
+          totalChunks: chunks
+        })
+      }
     }
   }
 
   try {
     const job = await auditQueue.add('audit-repo', { repoUrl })
-    res.json({ jobId: job.id, status: 'queued', message: 'Audit started' })
+    res.json({ jobId: job.id, status: 'queued', message: force ? 'Re-audit started (fresh scan)' : 'Audit started' })
   } catch (err) {
     res.status(500).json({ error: 'Failed to queue audit', details: err.message })
   }

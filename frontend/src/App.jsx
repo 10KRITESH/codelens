@@ -11,17 +11,20 @@ function App() {
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
 
-  const startAudit = async (repoUrl) => {
+  const [lastRepoUrl, setLastRepoUrl] = useState(null)
+
+  const startAudit = async (repoUrl, force = false) => {
     setState('loading')
     setProgress(0)
     setError(null)
+    setLastRepoUrl(repoUrl)
 
     try {
       // 1. POST to start audit
       const res = await fetch('/api/audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repoUrl })
+        body: JSON.stringify({ repoUrl, force })
       })
       
       const data = await res.json()
@@ -76,6 +79,12 @@ function App() {
     }
   }
 
+  const handleReAudit = () => {
+    if (lastRepoUrl) {
+      startAudit(lastRepoUrl, true)
+    }
+  }
+
   const resetState = () => {
     setState('idle')
     setProgress(0)
@@ -100,7 +109,7 @@ function App() {
         )}
 
         {state === 'complete' && result && (
-          <ReportView result={result} onReset={resetState} />
+          <ReportView result={result} onReset={resetState} onReAudit={handleReAudit} />
         )}
 
         {state === 'error' && (
